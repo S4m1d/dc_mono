@@ -1,39 +1,34 @@
 const std = @import("std");
+const StaticRes = @import("server/resource.zig").Static;
+const httpz = @import("httpz");
 
-var is_app_active = std.atomic.Value(bool).init(true);
+const App = struct {
+    allocator: std.mem.Allocator,
+};
 
 pub fn main() !void {
-    const address = try std.net.Address.parseIp4("127.0.0.1", 8080);
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
 
-    var server = try address.listen(.{});
-    defer server.deinit();
-    defer std.debug.print("gracefull shutdown works!", .{});
+    var app = App{ .allocator = allocator };
 
-    var sa = std.posix.Sigaction{
-        .handler = .{ .handler = handleOsSig },
-        .mask = std.posix.empty_sigset,
-        .flags = 0,
-        .restorer = null,
-    };
-
-    std.posix.sigaction(std.posix.SIG.INT, &sa, null);
-
-    while (is_app_active.load(.seq_cst)) {
-        try handleConn(try server.accept());
-    }
+    var server = try httpz.Server(*App).init(allocator, .{ .port = 8080 }, &app);
+    var router = try server.router(.{});
+    router.get("/info", getInfo, .{});
+    router.get("/index.html", getIndexHtml, .{});
+    try server.listen();
 }
 
-pub fn handleConn(conn: std.net.Server.Connection) !void {
-    defer conn.stream.close();
-    var buffer: [1024]u8 = undefined;
-    var http_server = std.http.Server.init(conn, &buffer);
-    var req = try http_server.receiveHead();
-    try req.respond("fuck off\n", .{});
+fn getInfo(_: *App, _: *httpz.Request, res: *httpz.Response) !void {
+    try res.json(.{
+        .hello = "friend",
+        .leave_me = "here",
+    }, .{});
 }
 
-pub fn handleOsSig(signo: i32) callconv(.c) void {
-    if (signo == std.posix.SIG.INT or signo == std.posix.SIG.TERM) {
-        // chose the most relaxed and fast type of ordering for now
-        is_app_active.store(false, .seq_cst);
-    }
+fn getIndexHtml(app: *App, _: *httpz.Request, res: *httpz.Response) !void {
+    const index_html_content = try StaticRes.readFresh(app.allocator, "pages/index.html");
+    defer app.allocator.free(index_html_content);
+    res.body = index_html_content;
+    try res.write();
 }
