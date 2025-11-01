@@ -3,6 +3,7 @@ const StaticRes = @import("server/resource.zig").Static;
 const httpz = @import("httpz");
 const App = @import("app.zig").App;
 const registration = @import("server/registration.zig");
+const db = @import("toolkit/db.zig");
 
 const c = @cImport({
     @cInclude("sqlite3.h");
@@ -12,18 +13,12 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    var db: ?*c.sqlite3 = null;
-
-    const rc = c.sqlite3_open_v2("db/mydb.db", &db, c.SQLITE_OPEN_READWRITE | c.SQLITE_OPEN_CREATE | c.SQLITE_OPEN_NOMUTEX, null);
-    if (rc != 0) {
-        std.debug.print("couldn't open db: return code {d}\n", .{rc});
-        @panic("couldn't open db");
-    }
-    defer _ = c.sqlite3_close(db);
+    var conn_pool = try db.ConnectionPool.init(allocator, 10);
+    defer conn_pool.deinit();
 
     var app = App{
         .allocator = allocator,
-        .db = db,
+        .conn_pool = &conn_pool,
     };
 
     var server = try httpz.Server(*App).init(allocator, .{ .port = 8080 }, &app);

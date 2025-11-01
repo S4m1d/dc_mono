@@ -1,5 +1,7 @@
 const std = @import("std");
 const User = @import("../model/user.zig").User;
+const db = @import("../toolkit/db.zig");
+
 const c = @cImport({
     @cInclude("sqlite3.h");
 });
@@ -10,9 +12,11 @@ const create_query =
     \\ VALUES (?,?,?);
 ;
 
-pub fn create(db: ?*c.sqlite3, user: User) !i64 {
+pub fn create(db_conn: db.DbConnection, user: User) !i64 {
+    const conn = db_conn._sqlite_conn;
+
     var create_stmt: ?*c.sqlite3_stmt = null;
-    var rc = c.sqlite3_prepare_v2(db, create_query, -1, &create_stmt, null);
+    var rc = c.sqlite3_prepare_v2(conn, create_query, -1, &create_stmt, null);
     if (rc != 0) {
         std.debug.print("couldn't prepare statement for user create query: return code {d}\n", .{rc});
         return error.ErrPrepStmt;
@@ -40,7 +44,7 @@ pub fn create(db: ?*c.sqlite3, user: User) !i64 {
 
     rc = c.sqlite3_step(create_stmt);
     if (rc != c.SQLITE_DONE) {
-        const errmsg = c.sqlite3_errmsg(db);
+        const errmsg = c.sqlite3_errmsg(conn);
         std.debug.print("couldn't execute user create query: return code {d}, diag:{s}\n", .{ rc, errmsg });
         return error.ErrStep;
     }
@@ -52,7 +56,7 @@ pub fn create(db: ?*c.sqlite3, user: User) !i64 {
     }
 
     var last_insert_rowid_stmt: ?*c.sqlite3_stmt = null;
-    rc = c.sqlite3_prepare_v2(db, last_insert_rowid_query, -1, &last_insert_rowid_stmt, null);
+    rc = c.sqlite3_prepare_v2(conn, last_insert_rowid_query, -1, &last_insert_rowid_stmt, null);
     if (rc != 0) {
         std.debug.print("couldn't prepare statement for last created user id fetching query: return code {d}\n", .{rc});
         return error.ErrPrepStmt;
@@ -60,7 +64,7 @@ pub fn create(db: ?*c.sqlite3, user: User) !i64 {
 
     rc = c.sqlite3_step(last_insert_rowid_stmt);
     if (rc != c.SQLITE_ROW) {
-        const errmsg = c.sqlite3_errmsg(db);
+        const errmsg = c.sqlite3_errmsg(conn);
         std.debug.print("couldn't execute last created user id fetching query: return code {d}, diag: {s}\n", .{ rc, errmsg });
         return error.ErrStep;
     }

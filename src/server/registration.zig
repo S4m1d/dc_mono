@@ -11,7 +11,10 @@ const UserRegReqBody = struct {
 
 pub fn postRegisterUser(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
     if (try req.json(UserRegReqBody)) |body| {
-        const id = try userRepo.create(app.db, .{
+        var conn = try app.conn_pool.acquire();
+        defer app.conn_pool.release(conn);
+
+        const id = try userRepo.create(conn.get(), .{
             .id = null,
             .username = body.username,
             .public_key = body.public_key,
