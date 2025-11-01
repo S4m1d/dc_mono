@@ -5,56 +5,56 @@ const c = @cImport({
 const ConnList = std.DoublyLinkedList(DbConnection);
 
 pub const ConnectionPool = struct {
-    max_open: u8,
-    in_use_conn_list: ConnList,
-    idle_conn_list: ConnList,
-    allocator: std.mem.Allocator,
-    lock: std.Thread.RwLock,
+    _max_open: u8,
+    _in_use_conn_list: ConnList,
+    _idle_conn_list: ConnList,
+    _allocator: std.mem.Allocator,
+    _lock: std.Thread.RwLock,
 
     pub fn init(allocator: std.mem.Allocator, max_open: u8) !ConnectionPool {
         return ConnectionPool{
-            .allocator = allocator,
-            .max_open = max_open,
-            .in_use_conn_list = ConnList{},
-            .idle_conn_list = ConnList{},
-            .lock = .{},
+            ._allocator = allocator,
+            ._max_open = max_open,
+            ._in_use_conn_list = ConnList{},
+            ._idle_conn_list = ConnList{},
+            ._lock = .{},
         };
     }
 
     pub fn deinit(self: *ConnectionPool) void {
-        while (self.in_use_conn_list.pop()) |db_conn_node| {
+        while (self._in_use_conn_list.pop()) |db_conn_node| {
             db_conn_node.data.deinit();
         }
     }
 
     pub fn acquire(self: *ConnectionPool) !Connection {
-        self.lock.lock();
-        defer self.lock.unlock();
+        self._lock.lock();
+        defer self._lock.unlock();
 
-        if (self.idle_conn_list.pop()) |node_to_acquire| {
+        if (self._idle_conn_list.pop()) |node_to_acquire| {
             std.debug.print("DEBUG: found idle conn, returning it...\n", .{});
-            self.in_use_conn_list.append(node_to_acquire);
+            self._in_use_conn_list.append(node_to_acquire);
             return Connection{ ._db_conn_node = node_to_acquire };
         }
 
         std.debug.print("DEBUG: no idle conns found, creating new...\n", .{});
 
-        const db_conn = try DbConnection.init(self.allocator);
+        const db_conn = try DbConnection.init(self._allocator);
 
-        var db_conn_node = try self.allocator.create(ConnList.Node);
+        var db_conn_node = try self._allocator.create(ConnList.Node);
         db_conn_node.data = db_conn;
 
-        self.in_use_conn_list.append(db_conn_node);
+        self._in_use_conn_list.append(db_conn_node);
 
         return .{ ._db_conn_node = db_conn_node };
     }
 
     pub fn release(self: *ConnectionPool, conn: Connection) void {
-        self.lock.lock();
-        defer self.lock.unlock();
+        self._lock.lock();
+        defer self._lock.unlock();
 
-        self.in_use_conn_list.remove(conn._db_conn_node);
-        self.idle_conn_list.append(conn._db_conn_node);
+        self._in_use_conn_list.remove(conn._db_conn_node);
+        self._idle_conn_list.append(conn._db_conn_node);
     }
 };
 

@@ -40,10 +40,6 @@
             .url = "git+https://github.com/karlseguin/http.zig?ref=zig-0.14#ef50c6878c3c512786e3311df657eb425b87ba91",
             .hash = "httpz-0.0.0-PNVzrAvCBgDPm4lE3vCQekPyCKAE2TIsbxly-GeS1_gl",
         },
-        .sqlite = .{
-            .url = "git+https://github.com/vrischmann/zig-sqlite?ref=zig-0.14.0#20211398f6114c9aac711a67a4fc5a2f42bac1f0",
-            .hash = "sqlite-3.48.0-F2R_awuMDgB5YDySyIsltg2fbJWc480EWhD04OIPnlbM",
-        },
     },
     .paths = .{
         "build.zig",
