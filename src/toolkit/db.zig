@@ -58,16 +58,16 @@ pub const ConnectionPool = struct {
     }
 };
 
-const PrpStmtsMap = std.hash_map.StringHashMap(?*c.sqlite3);
-
 // wrapper I need to operate on connection abstracting user from linked list
 pub const Connection = struct {
     _db_conn_node: *ConnList.Node,
 
-    pub fn get(self: Connection) DbConnection {
-        return self._db_conn_node.data;
+    pub fn get(self: Connection) *DbConnection {
+        return &self._db_conn_node.data;
     }
 };
+
+const PrpStmtsMap = std.hash_map.StringHashMap(?*c.sqlite3_stmt);
 
 pub const DbConnection = struct {
     _allocator: std.mem.Allocator,
@@ -93,11 +93,42 @@ pub const DbConnection = struct {
     }
 
     pub fn deinit(self: *DbConnection) void {
+        var it = self._prp_stmts_map.iterator();
+        while (it.next()) |entry| {
+            const rc = c.sqlite3_finalize(entry.value_ptr.*);
+            if (rc != c.SQLITE_OK) {
+                std.debug.print("WARNING: couldn't finalize statement: return code {d}\n", .{rc});
+            }
+        }
+
+        self._prp_stmts_map.deinit();
+
         const rc = c.sqlite3_close_v2(self._sqlite_conn);
         if (rc != c.SQLITE_OK) {
             std.debug.print("WARNING: couldn't close connection: return code {d}\n", .{rc});
         }
+    }
 
-        self._prp_stmts_map.deinit();
+    pub fn statement(self: *DbConnection, query: []const u8) !?*c.sqlite3_stmt {
+        if (self._prp_stmts_map.get(query)) |stmt| {
+            std.debug.print("DEBUG: found statement for: [{s}], returning it...\n", .{query});
+            return stmt;
+        }
+
+        var stmt: ?*c.sqlite3_stmt = null;
+        std.debug.print("DEBUG: couldn't find statement for: [{s}], preparing new one...\n", .{query});
+        const rc = c.sqlite3_prepare_v2(self._sqlite_conn, @ptrCast(query), -1, &stmt, null);
+        if (rc != 0) {
+            std.debug.print("couldn't prepare statement: return code {d}\n", .{rc});
+            return error.ErrPrepStmt;
+        }
+
+        try self._prp_stmts_map.put(query, stmt);
+
+        return stmt;
+    }
+
+    pub fn rst_statement(_: *DbConnection, stmt: ?*c.sqlite3_stmt) void {
+        _ = c.sqlite3_reset(stmt);
     }
 };
