@@ -9,7 +9,12 @@ pub const ConnectionPool = struct {
     _in_use_conn_list: ConnList,
     _idle_conn_list: ConnList,
     _allocator: std.mem.Allocator,
-    _lock: std.Thread.RwLock,
+    _in_use_mu: std.Thread.Mutex,
+    _mu: std.Thread.Mutex,
+    _cond: std.Thread.Condition,
+    _num_open: usize,
+    _num_qued_to_open: usize,
+    _num_idle: usize,
 
     pub fn init(allocator: std.mem.Allocator, max_open: u8) !ConnectionPool {
         return ConnectionPool{
@@ -17,7 +22,12 @@ pub const ConnectionPool = struct {
             ._max_open = max_open,
             ._in_use_conn_list = ConnList{},
             ._idle_conn_list = ConnList{},
-            ._lock = .{},
+            ._in_use_mu = .{},
+            ._mu = .{},
+            ._cond = .{},
+            ._num_open = 0,
+            ._num_qued_to_open = 0,
+            ._num_idle = 0,
         };
     }
 
@@ -28,33 +38,80 @@ pub const ConnectionPool = struct {
     }
 
     pub fn acquire(self: *ConnectionPool) !Connection {
-        self._lock.lock();
-        defer self._lock.unlock();
+        while (true) {
+            self._mu.lock();
+            defer self._mu.unlock();
 
-        if (self._idle_conn_list.pop()) |node_to_acquire| {
-            std.debug.print("DEBUG: found idle conn, returning it...\n", .{});
-            self._in_use_conn_list.append(node_to_acquire);
-            return Connection{ ._db_conn_node = node_to_acquire };
+            // if there is available idle conn, return it
+            if (self._num_idle > 0) {
+                std.debug.print("DEBUG: found idle conn, returning it...\n", .{});
+                const node_to_acquire = self._idle_conn_list.pop().?;
+                self._num_idle -= 1;
+
+                self._in_use_mu.lock();
+                self._in_use_conn_list.append(node_to_acquire);
+                self._in_use_mu.unlock();
+
+                return Connection{ ._db_conn_node = node_to_acquire };
+            }
+            // else if open connections limit is not reached yet, open new connection and put it into idle list
+            else if (self._num_open + self._num_qued_to_open < self._max_open) {
+                std.debug.print("DEBUG: new connection can be open, launching detached thread...\n", .{});
+                const th = try std.Thread.spawn(.{}, openConn, .{self});
+                th.detach();
+                self._num_qued_to_open += 1;
+            }
+
+            // else wait for next available idle connection
+            self._cond.wait(&self._mu);
+        }
+    }
+
+    pub fn openConn(self: *ConnectionPool) void {
+        {
+            self._mu.lock();
+            defer self._mu.unlock();
+            const db_conn = DbConnection.init(self._allocator) catch |err| {
+                std.debug.print("failed to open db connection: caught error from connection init: {}", .{err});
+                return;
+            };
+            errdefer db_conn.deinit();
+
+            var db_conn_node = self._allocator.create(ConnList.Node) catch |err| {
+                std.debug.print("failed to open db connection: caught error from node allocation: {}", .{err});
+                return;
+            };
+
+            db_conn_node.data = db_conn;
+            self._num_open += 1;
+
+            self._idle_conn_list.append(db_conn_node);
+            self._num_idle += 1;
         }
 
-        std.debug.print("DEBUG: no idle conns found, creating new...\n", .{});
-
-        const db_conn = try DbConnection.init(self._allocator);
-
-        var db_conn_node = try self._allocator.create(ConnList.Node);
-        db_conn_node.data = db_conn;
-
-        self._in_use_conn_list.append(db_conn_node);
-
-        return .{ ._db_conn_node = db_conn_node };
+        // signaling here AFTER unlocking mutex
+        // because otherwise we can run into unlocking mutex, that is relocked by wait
+        // which leads to undefined behaviour
+        self._cond.signal();
     }
 
     pub fn release(self: *ConnectionPool, conn: Connection) void {
-        self._lock.lock();
-        defer self._lock.unlock();
+        {
+            self._mu.lock();
+            defer self._mu.unlock();
 
-        self._in_use_conn_list.remove(conn._db_conn_node);
-        self._idle_conn_list.append(conn._db_conn_node);
+            self._in_use_mu.lock();
+            self._in_use_conn_list.remove(conn._db_conn_node);
+            self._in_use_mu.unlock();
+
+            self._idle_conn_list.append(conn._db_conn_node);
+            self._num_idle += 1;
+        }
+
+        // signaling here AFTER unlocking mutex
+        // because otherwise we can run into unlocking mutex, that is relocked by wait
+        // which leads to undefined behaviour
+        self._cond.signal();
     }
 };
 

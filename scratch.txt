@@ -1,0 +1,30 @@
+    pub fn acquire(self: *ConnectionPool) !Connection {
+        self._mu.lock();
+        defer self._mu.unlock();
+
+        if (self._idle_conn_list.pop()) |node_to_acquire| {
+            std.debug.print("DEBUG: found idle conn, returning it...\n", .{});
+            self._in_use_conn_list.append(node_to_acquire);
+
+            self._num_idle -= 1;
+            return Connection{ ._db_conn_node = node_to_acquire };
+        }
+
+        while (self._num_open == self._max_open) {
+            self._cond.wait(&self._mu);
+        }
+
+        std.debug.print("DEBUG: no idle conns found, creating new...\n", .{});
+
+        const db_conn = try DbConnection.init(self._allocator);
+
+        var db_conn_node = try self._allocator.create(ConnList.Node);
+        db_conn_node.data = db_conn;
+
+        self._in_use_conn_list.append(db_conn_node);
+
+        self._num_open += 1;
+        self._cond.signal();
+
+        return .{ ._db_conn_node = db_conn_node };
+    }
